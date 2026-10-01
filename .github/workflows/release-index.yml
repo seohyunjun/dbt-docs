@@ -1,0 +1,59 @@
+# **what?**
+# Build index.html and attach it to a GitHub Release for the pushed tag.
+
+# **why?**
+# dbt packages cannot replace the docs site, so downstream projects pin a release
+# tag and download this index.html instead of building dbt-docs locally.
+
+# **when?**
+# This will run when a tag matching v* is pushed, or when called in manually with a tag.
+
+
+name: Release index.html
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)attach index.html to'
+        type: string
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_index:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/generate-index.yml
+
+  release:
+    needs: [build_index]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download index.html artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # actions/download-artifact@v4
+        with:
+          name: ${{ needs.build_index.outputs.index_artifact_name }}
+          path: dist
+
+      - name: Create or update release
+        run: |
+          (cd dist && sha256sum index.html | tee index.html.sha256)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/index.html dist/index.html.sha256 --clobber
+          else
+            gh release create "$TAG" dist/index.html dist/index.html.sha256 \
+              --title "$TAG" --generate-notes
+          fi
